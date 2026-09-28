@@ -1,0 +1,233 @@
+import { useEffect, useMemo, useState } from "react";
+import { FiClock, FiLock, FiUser } from "react-icons/fi";
+import { Link, useOutletContext } from "react-router-dom";
+import AttendancePageHeader from "../../components/attendance/AttendancePageHeader";
+import AttendanceSummaryCards from "../../components/attendance/AttendanceSummaryCards";
+import MonthlyAttendanceTable from "../../components/attendance/MonthlyAttendanceTable";
+import DepartmentScopeNotice from "../../components/common/DepartmentScopeNotice";
+import useAuth from "../../hooks/useAuth";
+import useEmployeeDirectory from "../../hooks/useEmployeeDirectory";
+import useHolidayDates from "../../hooks/useHolidayDates";
+import useManagerScope from "../../hooks/useManagerScope";
+import useMonthlyAttendance from "../../hooks/useMonthlyAttendance";
+import {
+  getMonthLabel,
+  shiftMonth,
+} from "../../utils/attendance/attendanceDate";
+import { isApprover } from "../../utils/attendance/attendanceRequestUtils";
+import {
+  buildMonthlyReport,
+  getMonthlySummary,
+} from "../../utils/attendance/attendanceUtils";
+
+/*
+|--------------------------------------------------------------------------
+| Monthly Attendance
+|--------------------------------------------------------------------------
+| Company wide totals per employee for the selected month. Search comes from
+| the header search bar.
+|
+| The whole company's month is on this page, so it is only opened for the
+| roles that are meant to see it. Everyone else has their own month on
+| `/attendance/my`.
+|
+| A manager is one of those roles and reads the same page narrowed to their
+| own departments. The narrowing is applied to the directory, which is what
+| the rows are built from, so a department nobody in it appears on the report
+| at all rather than appearing with empty totals.
+|
+| The restriction is not only a screen: the company code is withheld from
+| the three hooks below, so an employee who reaches this route never fetches
+| the directory or anybody else's records in the first place.
+|
+| Declared holidays are left out of the totals: a day the office was closed
+| is not a working day, and counting it would drag every attendance rate down
+| by a day nobody was expected in.
+|--------------------------------------------------------------------------
+*/
+
+function MonthlyAttendance() {
+
+  const { company, currentUser } = useAuth();
+
+  const canView = isApprover(currentUser);
+
+  const companyCode = canView ? company?.companyCode : "";
+
+  const { search, setSearch, setSearchPlaceholder } = useOutletContext();
+
+  const today = useMemo(() => new Date(), []);
+
+  const [year, setYear] = useState(today.getFullYear());
+  const [month, setMonth] = useState(today.getMonth() + 1);
+
+  const {
+    directory,
+    departments,
+    loading: directoryLoading,
+    error: directoryError,
+    reload: reloadDirectory,
+  } = useEmployeeDirectory(companyCode);
+
+  const {
+    records,
+    loading: recordsLoading,
+    error: recordsError,
+    reload: reloadRecords,
+  } = useMonthlyAttendance(companyCode, year, month);
+
+  const { holidayDates, reload: reloadHolidays } = useHolidayDates(
+    companyCode,
+    useMemo(() => [year], [year])
+  );
+
+  const {
+    filterDirectory,
+    isScoped,
+    departments: myDepartments,
+    loading: scopeLoading,
+  } = useManagerScope();
+
+  useEffect(() => {
+    setSearchPlaceholder("Search employees by name, ID or department...");
+
+    return () => {
+      setSearch("");
+      setSearchPlaceholder("Search...");
+    };
+  }, [setSearch, setSearchPlaceholder]);
+
+  const rows = useMemo(
+    () =>
+      buildMonthlyReport(
+        filterDirectory(directory),
+        records,
+        holidayDates
+      ),
+    [filterDirectory, directory, records, holidayDates]
+  );
+
+  const summary = useMemo(() => getMonthlySummary(rows), [rows]);
+
+  /*
+  | The filter offers only the departments the rows can belong to. Left
+  | unnarrowed every option but the reviewer's own would empty the table.
+  */
+  const departmentOptions = useMemo(
+    () =>
+      isScoped
+        ? myDepartments.map((department) => department.name)
+        : departments,
+    [isScoped, myDepartments, departments]
+  );
+
+  const currentLabel = getMonthLabel(year, month);
+
+  const isCurrentMonth =
+    year === today.getFullYear() && month === today.getMonth() + 1;
+
+  const handleMonthChange = (direction) => {
+
+    const next = shiftMonth(year, month, direction);
+
+    setYear(next.year);
+    setMonth(next.month);
+
+  };
+
+  const handleRetry = () => {
+    reloadDirectory();
+    reloadRecords();
+    reloadHolidays();
+  };
+
+  /*
+  |--------------------------------------------------------------------------
+  | Access
+  |--------------------------------------------------------------------------
+  | Rather than a dead end, the employee is pointed at the page that answers
+  | what they came here for: their own month.
+  */
+
+  if (!canView) {
+
+    return (
+
+      <div className="p-0 sm:p-2">
+
+        <AttendancePageHeader
+          title="Monthly Attendance"
+          subtitle="Company-wide monthly attendance"
+          icon={<FiClock />}
+        />
+
+        <div className="ui-card mt-6 flex flex-col items-center justify-center px-4 py-14 text-center sm:mt-8 sm:px-6 sm:py-20">
+
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+            <FiLock size={28} />
+          </div>
+
+          <h3 className="mt-5 text-lg font-semibold text-ink sm:text-xl">
+            Monthly attendance is restricted
+          </h3>
+
+          <p className="mt-2 max-w-sm text-sm text-ink-subtle">
+            Only HR, department managers and the company owner can see other
+            employees' months. Your own attendance is on My Attendance.
+          </p>
+
+          <Link
+            to="/attendance/my"
+            className="ui-btn ui-btn-primary mt-6 font-semibold"
+          >
+            <FiUser />
+            View My Attendance
+          </Link>
+
+        </div>
+
+      </div>
+
+    );
+
+  }
+
+  return (
+    <div className="p-0 sm:p-2">
+
+      <AttendancePageHeader
+        title="Monthly Attendance"
+        subtitle={`Company-wide monthly attendance for ${currentLabel}`}
+        icon={<FiClock />}
+      />
+
+      <div className="mt-6 space-y-4 sm:mt-8 sm:space-y-6">
+
+        <DepartmentScopeNotice subject="attendance" />
+
+        <AttendanceSummaryCards
+          summary={summary}
+          showPending
+          gridClassName="grid-cols-2 xl:grid-cols-5"
+        />
+
+        <MonthlyAttendanceTable
+          rows={rows}
+          loading={directoryLoading || recordsLoading || scopeLoading}
+          error={directoryError || recordsError}
+          onRetry={handleRetry}
+          search={search}
+          departments={departmentOptions}
+          currentLabel={currentLabel}
+          onMonthChange={handleMonthChange}
+          disableNextMonth={isCurrentMonth}
+        />
+
+      </div>
+
+    </div>
+  );
+
+}
+
+export default MonthlyAttendance;
