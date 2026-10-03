@@ -1,0 +1,1 @@
+import{t as e}from"./jsx-runtime-BKllkxft.js";import{In as t}from"./index-D77Y5Og9.js";var n=e();function r(){return(0,n.jsx)(t,{to:`/attendance/requests`,replace:!0})}export{r as default};

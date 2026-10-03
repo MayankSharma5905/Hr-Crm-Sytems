@@ -1,0 +1,1 @@
+var e=e=>`₹ ${Number(e||0).toLocaleString(`en-IN`)}`,t=e=>`₹ ${Number(e||0).toLocaleString(`en-IN`,{minimumFractionDigits:2,maximumFractionDigits:2})}`;export{e as n,t};

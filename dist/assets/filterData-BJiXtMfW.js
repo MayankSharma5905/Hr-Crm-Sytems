@@ -1,0 +1,1 @@
+var e=(e,t,n)=>{if(!t.trim())return e;let r=t.toLowerCase();return e.filter(e=>n.some(t=>t.split(`.`).reduce((e,t)=>e?.[t],e)?.toString().toLowerCase().includes(r)))};export{e as t};
