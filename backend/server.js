@@ -19,12 +19,18 @@ app.use(express.json());
 
 app.get("/",(req,res)=>{
     res.status(200).json({
-        sucsess:true,
+        success:true,
         message:"hrms Backend Api is running",
         version: "1.0.0"
     });
 });
 
+app.get("/health", (req, res) => {
+    res.status(200).json({
+        success: true,
+        message: "HRMS Backend is healthy"
+    });
+});
 
 
 
@@ -34,7 +40,7 @@ app.get("/",(req,res)=>{
 const PORT = process.env.PORT || 5000;
 app.use("/api/employees", require("./src/routes/employeeRoutes"));
 app.use("/api/auth", authRoutes);
-app.listen(PORT,()=>{
+app.listen(PORT,"0.0.0.0",()=>{
     console.log(`Hrms Backend running on http://localhost:${PORT}`);
 });
 
