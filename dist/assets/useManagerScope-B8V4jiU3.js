@@ -1,0 +1,1 @@
+import{i as e,n as t}from"./jsx-runtime-BKllkxft.js";import{t as n}from"./index-D77Y5Og9.js";var r=e(t(),1),i=()=>{let e=(0,r.useContext)(n);if(!e)throw Error(`useManagerScope must be used within a ManagerScopeProvider`);return e};export{i as t};
