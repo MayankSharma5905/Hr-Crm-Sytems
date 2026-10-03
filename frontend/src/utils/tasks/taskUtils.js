@@ -1,0 +1,718 @@
+import {
+  ACTIVITY_TYPE,
+  COMPLETED_STATUS,
+  IN_PROGRESS_STATUS,
+  PAUSED_STATUS,
+} from "../../services/taskService";
+import { getDateKey } from "../attendance/attendanceDate";
+import { getUserRole } from "../attendance/attendanceRequestUtils";
+import { OWNER_ROLE } from "../permissions/permissionConstants";
+import { isOwnerRole } from "../permissions/permissionUtils";
+import { ERROR_INPUT_CLASS, INPUT_CLASS } from "./taskConstants";
+
+/*
+|--------------------------------------------------------------------------
+| Task Utils
+|--------------------------------------------------------------------------
+| Chhote pure functions — koi state nahi, koi Firebase nahi. Andar jo diya,
+| usi se bahar nikalta hai. Isliye kisi bhi page/component se use ho sakte hain.
+|--------------------------------------------------------------------------
+*/
+
+/*
+|--------------------------------------------------------------------------
+| Identity
+|--------------------------------------------------------------------------
+| Permissions ab useRoleAccess() / canAccessSection("tasks.*") se aati hain
+| — poore project jaisa. Yahan sirf "main kaun hun" bachta hai, "main kya
+| kar sakta hun" nahi.
+|--------------------------------------------------------------------------
+*/
+
+/*
+| Task kisne banaya — ownership ke liye createdById use hota hai, createdBy
+| nahi. createdBy display naam hai aur do logon ka naam same ho sakta hai.
+|
+| employeeId khaali ho to hamesha false: Owner ka employee record nahi hota
+| (""), aur purane tasks mein createdById undefined hai — dono ko match hone
+| se rokna zaroori hai.
+*/
+export const isTaskCreator = (task, employeeId) =>
+  Boolean(employeeId) && task?.createdById === employeeId;
+
+// Owner ke paas employmentInfo nahi hota — wo employee hai hi nahi
+export const getCurrentEmployeeId = (currentUser) =>
+  currentUser?.employmentInfo?.employeeId ||
+  currentUser?.account?.username ||
+  "";
+
+/*
+| Jo abhi kaam kar raha hai — id aur naam ek saath.
+|
+| Dono chain pehle se project mein thin: id wahi hai jo createdById mein
+| jaati hai, aur naam wahi jo createdBy mein (pehle ye AllTasks ke andar
+| padi thi). Yahan lane ki wajah ye hai ki activity ko bhi bilkul yahi
+| pehchaan chahiye, aur dashboard card ko bhi — teen jagah teen chain nahi
+| honi chahiye, warna ek hi task par do alag naam dikh sakte hain.
+|
+| currentUser ki shakal role se badalti hai: Owner ke paas { role, name,
+| email } hota hai, Employee/HR ke paas poora employee record. Isliye
+| fallback chain — aakhir mein "Admin", taaki activity kabhi bina naam ke
+| na dikhe.
+|
+| id role se tay hoti hai, sirf employee record se nahi: Owner ka employee
+| record hota hi nahi, isliye uske liye fixed key "owner" (OWNER_ROLE).
+| Ek company mein Owner ek hi hai, to ye key uske liye utni hi pakki
+| pehchaan hai jitni HR/Employee ke liye unki employeeId. Isse pehle yahan
+| khaali string aati thi aur service usko "unknown" bana deti thi — ek hi
+| dabbe mein sabki activity.
+*/
+export const getCurrentActionUser = (currentUser) => ({
+  id: isOwnerRole(getUserRole(currentUser))
+    ? OWNER_ROLE
+    : getCurrentEmployeeId(currentUser),
+  name:
+    currentUser?.personalInfo?.name ||
+    currentUser?.name ||
+    currentUser?.email ||
+    "Admin",
+});
+
+// Sirf logged-in employee ke apne tasks — "My Tasks" wala view.
+// Filter browser mein hota hai, isliye Firebase mein index ki zaroorat nahi.
+export const filterOwnTasks = (tasks = [], currentUser) => {
+  const employeeId = getCurrentEmployeeId(currentUser);
+
+  if (!employeeId) return [];
+
+  return tasks.filter((task) => task.assignedTo === employeeId);
+};
+
+// "2026-08-15" → "Aug 15, 2026"
+export const formatDate = (date) =>
+  date
+    ? new Date(`${date}T00:00:00`).toLocaleDateString("en-US", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+      })
+    : "No due date";
+
+/*
+| createdAt / updatedAt millisecond timestamp hain (Date.now()), dueDate ki
+| tarah "YYYY-MM-DD" string nahi. Isliye inka apna formatter chahiye —
+| timestamp formatDate() mein daalne par "Invalid Date" banta hai.
+|
+| 1754640000000 → "Aug 08, 2026, 4:30 PM"
+*/
+export const formatTimestamp = (ms) =>
+  ms
+    ? new Date(ms).toLocaleString("en-US", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "--";
+
+/*
+| Kitna waqt laga — formatTimestamp waqt ka bindu batata hai, ye lambai.
+|
+| Sirf do sabse badi ikaai dikhti hain: "2d 5h" mein minute jodne se ginti
+| padhne layak nahi rehti, aur itni barikee ka koi kaam bhi nahi.
+|
+| Second nahi dikhate — status manually badla jaata hai, to itni barikee ka
+| matlab hi nahi. Ek minute se kam ko "< 1m" kehte hain, warna abhi-abhi
+| shuru kiya task "0m" dikhata jo galat lagta hai.
+|
+| 9900000 → "2h 45m"
+*/
+export const formatDuration = (ms) => {
+  const minutes = Math.floor(Math.max(0, ms || 0) / 60000);
+
+  if (minutes < 1) return ms > 0 ? "< 1m" : "0m";
+
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+
+  if (days) return hours ? `${days}d ${hours}h` : `${days}d`;
+  if (hours) return mins ? `${hours}h ${mins}m` : `${hours}h`;
+
+  return `${mins}m`;
+};
+
+/*
+| Aaj ki date YYYY-MM-DD mein — local, UTC nahi.
+|
+| Ginti ab attendance ke getDateKey() se hoti hai, apni alag nahi. Pehle
+| yahan timezone offset khud ghataya jaata tha aur toISOString() se kaata
+| jaata tha — nateeja bilkul wahi tha, par do implementation ka matlab hai
+| ki wo kabhi alag jawab de sakti hain, aur us din Tasks ka "aaj" Attendance
+| ke "aaj" se alag ho jaata.
+|
+| Naam yahin rehta hai: poora module isi se "aaj" maangta hai, aur wahi
+| tarika leaveUtils ka getTodayLeaveDate() bhi apnata hai — apna naam, kaam
+| canonical helper ka.
+*/
+export const todayInputValue = () => getDateKey();
+
+// Kitne din ka farak hai — negative matlab date nikal chuki hai
+const daysBetween = (from, to) =>
+  Math.round(
+    (new Date(`${to}T00:00:00`) - new Date(`${from}T00:00:00`)) / 86400000
+  );
+
+// "2026-08-09" → "Due in 2 days" / "Due today" / "3 days overdue"
+export const dueLabel = (dueDate, today) => {
+  if (!dueDate) return "No due date";
+
+  const diff = daysBetween(today, dueDate);
+
+  if (diff === 0) return "Due today";
+  if (diff === 1) return "Due tomorrow";
+  if (diff > 1) return `Due in ${diff} days`;
+  if (diff === -1) return "1 day overdue";
+  return `${Math.abs(diff)} days overdue`;
+};
+
+// Due date nikal chuki hai aur task ab tak pending hai
+export const isOverdue = (task, today) =>
+  Boolean(task.dueDate) &&
+  task.status !== COMPLETED_STATUS &&
+  task.dueDate < today;
+
+/*
+|--------------------------------------------------------------------------
+| Date-wise
+|--------------------------------------------------------------------------
+| Tasks ko unki due date ke hisaab se dekhna: ek din ke, ek range ke, ya
+| poori list din-ke-hisaab se bandhi hui.
+|
+| Teenon dueDate par chalte hain — us jagah par nahi jahan task Firebase
+| mein padi hai. Ye farak maayne rakhta hai: purane tasks aaj bhi
+| run/{taskId} par hain aur unka koi date-khaana hai hi nahi, par unki
+| dueDate poori tarah theek hai. Isliye ye teenon function legacy, dated
+| aur undated — teenon par ek jaisa chalte hain.
+|
+| Isi wajah se yahan ek bhi Firebase read nahi hai. Seedha us din ke node
+| par listener lagana sasta zaroor hota (khaana structure hai hi isliye),
+| par wo legacy tasks ko dekh hi nahi paata — wo us din ke khaane mein hain
+| hi nahi. Jab tak purane tasks maujood hain, "us din kya due hai" ka sahi
+| jawab poori list se hi nikalta hai, aur wo list subscribeTasks se pehle
+| se aa rahi hai.
+*/
+
+// Ek din ke tasks. Date na ho to khaali list — "sab dikha do" nahi, kyunki
+// bina din ke is sawaal ka koi matlab hi nahi
+export const filterTasksByDate = (tasks = [], date) =>
+  date ? tasks.filter((task) => task.dueDate === date) : [];
+
+/*
+| Do taareekhon ke beech ke tasks, dono sire shaamil.
+|
+| Keys zero-padded hain, isliye seedha string compare kaafi hai — wahi
+| tarika holidayUtils bhi apnata hai. Sire ulte aayein to khaali list,
+| warna ek galat range chup-chaap sab kuch de deti.
+|
+| Bina dueDate wale kabhi nahi aate: wo kisi range mein hote hi nahi.
+*/
+export const filterTasksByDateRange = (tasks = [], from, to) => {
+  if (!from || !to || from > to) return [];
+
+  return tasks.filter(
+    (task) => task.dueDate && task.dueDate >= from && task.dueDate <= to
+  );
+};
+
+/*
+| Poori list din-ke-hisaab se bandhi hui:
+|
+|   [{ date: "2026-08-18", label: "Aug 18, 2026", tasks: [A, B] },
+|    { date: "2026-08-19", label: "Aug 19, 2026", tasks: [C] },
+|    { date: "",           label: "No due date",  tasks: [D] }]
+|
+| Shakal wahi hai jo holidayUtils ke groupHolidaysByMonth ki hai: pehle
+| bandho, phir kram lagao. Khaali khaane bante hi nahi, isliye jitne din
+| hain utni hi rows.
+|
+| Label formatDate se aata hai, alag se nahi banta — wo khaali date par
+| pehle se "No due date" kehta hai, aur isse task ki date har jagah ek hi
+| shakal mein dikhti hai.
+|
+| Bina date wale sabse aakhir mein: wo kisi din ke hain hi nahi, aur beech
+| mein aa jaayein to dinon ka kram hi toot jaata hai.
+|
+| Ek din ke andar tasks ka kram wahi rehta hai jo aaya tha (flattenRun se
+| naya sabse upar), isliye caller pehle apni marzi ka sort lagakar bhej
+| sakta hai — grouping use bigaadti nahi.
+*/
+export const groupTasksByDueDate = (tasks = []) => {
+  const groups = new Map();
+
+  tasks.forEach((task) => {
+    // undefined aur "" dono ek hi khaana — "koi date nahi"
+    const date = task?.dueDate || "";
+
+    if (!groups.has(date)) {
+      groups.set(date, {
+        date,
+        label: formatDate(date),
+        tasks: [],
+      });
+    }
+
+    groups.get(date).tasks.push(task);
+  });
+
+  return [...groups.values()].sort((a, b) => {
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+
+    return a.date.localeCompare(b.date);
+  });
+};
+
+/*
+|--------------------------------------------------------------------------
+| Assign-wise
+|--------------------------------------------------------------------------
+| Upar ke teenon "us din kya due hai" poochte hain. Ye teen "us din kya
+| diya gaya" poochte hain — wahi sawaal, doosre sire se.
+|
+| Dono ka jawab ek hi list se nikalta hai, kyunki Firebase ka khaana dueDate
+| ka hai (taskService ka taskBucket) — createdAt ka nahi. Ek hi din banaye
+| gaye do tasks ki due date alag ho to wo do alag nodes mein padte hain,
+| isliye "us din kya diya gaya" ka jawab kisi ek node se aa hi nahi sakta.
+| Poori list par filter hi ek tarika hai, aur wo list subscribeTasks se
+| pehle se aa rahi hai — yahan bhi ek bhi Firebase read nahi hai.
+|
+| Ye reassignment nahi jaanti. createdAt task BANNE ka waqt hai, aur
+| assignedTo baad mein edit ho sakta hai (EDITABLE_FIELDS) — us edit se
+| createdAt hilta nahi. Matlab jawab "task is din banaya gaya tha", na ki
+| "ye employee ko is din mila". Jab tak koi task ka assignee badalta nahi,
+| dono ek hi baat hain.
+*/
+
+/*
+| Task kis din banaya gaya, local calendar din ke hisaab se.
+|
+| createdAt millisecond timestamp hai, dueDate ki tarah pehle se key nahi
+| (formatTimestamp ke paas wahi wajah likhi hai), isliye din getDateKey se
+| banta hai — wahi helper jo attendance aur dueDate dono ka din tay karta
+| hai, taaki "aaj" har jagah ek hi din ho.
+|
+| Bahut purane tasks mein createdAt na ho to khaali string — undated dueDate
+| ki tarah, "koi din nahi" apne aap mein ek jawab hai.
+*/
+export const assignedDateKey = (task) =>
+  Number.isFinite(task?.createdAt) ? getDateKey(task.createdAt) : "";
+
+// filterTasksByDate ka jodidaar. Date na ho to khaali list, wahi wajah —
+// bina din ke is sawaal ka koi matlab hi nahi
+export const filterTasksByAssignedDate = (tasks = [], date) =>
+  date ? tasks.filter((task) => assignedDateKey(task) === date) : [];
+
+/*
+| Do taareekhon ke beech assign hue tasks, dono sire shaamil.
+|
+| Keys zero-padded hain isliye string compare kaafi hai, aur ulte sire par
+| khaali list — bilkul filterTasksByDateRange jaisa. Bina createdAt wale
+| kabhi nahi aate: unka koi din hi nahi, to wo kisi range mein bhi nahi.
+*/
+export const filterTasksByAssignedDateRange = (tasks = [], from, to) => {
+  if (!from || !to || from > to) return [];
+
+  return tasks.filter((task) => {
+    const date = assignedDateKey(task);
+
+    return date && date >= from && date <= to;
+  });
+};
+
+/*
+| Poori list assign-din ke hisaab se bandhi hui — groupTasksByDueDate ki
+| shakal wahi ki wahi:
+|
+|   [{ date: "2026-08-18", label: "Aug 18, 2026", tasks: [A, B] },
+|    { date: "",           label: "No due date",  tasks: [C] }]
+|
+| Ek farq: kram ulta hai. Due dates aage ki taraf padhi jaati hain (aaj,
+| phir kal), par assign hui taareekhein peeche ki taraf — naya kaam sabse
+| upar, wahi kram jo flattenRun list ko deta hai.
+|
+| Label formatDate se hi aata hai taaki din har jagah ek shakal mein dikhe.
+| Uska khaali-date wala jawab "No due date" hai, jo yahan theek nahi baithta
+| — isliye wo yahan alag se likha hai.
+*/
+export const groupTasksByAssignedDate = (tasks = []) => {
+  const groups = new Map();
+
+  tasks.forEach((task) => {
+    const date = assignedDateKey(task);
+
+    if (!groups.has(date)) {
+      groups.set(date, {
+        date,
+        label: date ? formatDate(date) : "No assigned date",
+        tasks: [],
+      });
+    }
+
+    groups.get(date).tasks.push(task);
+  });
+
+  // Bina din wale sabse aakhir mein: wo kisi din ke hain hi nahi, aur beech
+  // mein aa jaayein to dinon ka kram hi toot jaata hai
+  return [...groups.values()].sort((a, b) => {
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+
+    return b.date.localeCompare(a.date);
+  });
+};
+
+// Task mein sirf employee ki id save hai — naam employees list se aata hai
+export const assigneeName = (task, employees) =>
+  employees.find((employee) => employee.id === task.assignedTo)?.name ||
+  task.assignedTo ||
+  "Unassigned";
+
+/*
+| Ek employee ke wo tasks jo abhi In Progress hain — task ko chhodkar jise
+| hum start karne ja rahe hain.
+|
+| Ek waqt par ek hi kaam chal sakta hai, isliye start karne se pehle page
+| yahi list nikaalta hai aur unhe Paused bhej deta hai. List (array) lautti
+| hai, ek task nahi: purana data ya do tab se ek saath badla hua status —
+| dono soorat mein ek se zyada mil sakte hain, aur tab sab rukne chahiye.
+|
+| assignedTo khaali ho to khaali list: bina assignee wale tasks ka koi
+| "ek waqt par ek" niyam nahi banta.
+*/
+export const runningTasksOf = (tasks = [], assignedTo, exceptTaskId) => {
+  if (!assignedTo) return [];
+
+  return tasks.filter(
+    (task) =>
+      task.assignedTo === assignedTo &&
+      task.id !== exceptTaskId &&
+      task.status === IN_PROGRESS_STATUS
+  );
+};
+
+// Status-wise ginti — summary cards aur Task Progress dono ke liye.
+// today optional hai taaki purane call (sirf tasks ke saath) bhi chalte rahein.
+export const taskSummary = (tasks, today = todayInputValue()) => ({
+  total: tasks.length,
+  todo: tasks.filter((task) => task.status === "To Do").length,
+  active: tasks.filter((task) => task.status === IN_PROGRESS_STATUS).length,
+  paused: tasks.filter((task) => task.status === PAUSED_STATUS).length,
+  completed: tasks.filter((task) => task.status === COMPLETED_STATUS).length,
+  // Aaj due hai aur ab tak pending — jo ho chuka wo "due" nahi kehlaata
+  dueToday: tasks.filter(
+    (task) => task.status !== COMPLETED_STATUS && task.dueDate === today
+  ).length,
+  overdue: tasks.filter((task) => isOverdue(task, today)).length,
+});
+
+/*
+|--------------------------------------------------------------------------
+| Task Progress
+|--------------------------------------------------------------------------
+| Chaaron status ka distribution — inka jod hamesha total hota hai, isliye ye
+| ek hi stacked bar mein aa sakte hain.
+|
+| Overdue ko jaan-boojhkar isse bahar rakha hai: wo chautha status nahi,
+| To Do aur In Progress ke andar ka subset hai. Chaaron ko ek bar mein
+| jodne par total 100% se zyada ho jaata. Isliye uska apna % hai — pending
+| ke against, total ke against nahi.
+|--------------------------------------------------------------------------
+*/
+export const taskProgress = (summary) => {
+  const total = summary.total || 0;
+
+  // Total 0 ho to divide by zero NaN de dega
+  const percent = (value) => (total ? Math.round((value / total) * 100) : 0);
+
+  // Bar ki width ke liye bina round kiya hua share — teen rounded percent
+  // jodne par 99% ya 101% ban jaate hain aur bar mein khaali jagah dikhti hai
+  const share = (value) => (total ? (value / total) * 100 : 0);
+
+  const pending = total - summary.completed;
+
+  return {
+    total,
+    pending,
+    completionRate: percent(summary.completed),
+    segments: [
+      {
+        label: "To Do",
+        value: summary.todo,
+        percent: percent(summary.todo),
+        share: share(summary.todo),
+      },
+      {
+        label: "In Progress",
+        value: summary.active,
+        percent: percent(summary.active),
+        share: share(summary.active),
+      },
+      {
+        label: "Paused",
+        value: summary.paused,
+        percent: percent(summary.paused),
+        share: share(summary.paused),
+      },
+      {
+        label: "Completed",
+        value: summary.completed,
+        percent: percent(summary.completed),
+        share: share(summary.completed),
+      },
+    ],
+    overdue: summary.overdue,
+    overduePercent: pending
+      ? Math.round((summary.overdue / pending) * 100)
+      : 0,
+  };
+};
+
+/*
+|--------------------------------------------------------------------------
+| Team Workload
+|--------------------------------------------------------------------------
+| Employee-wise ginti. Sirf un logon ki row banti hai jinke paas task hai —
+| employees list se nahi, tasks se banti hai. Isliye jis employee ka record
+| delete ho gaya ho uski row bhi dikhegi (naam ki jagah uski id, kyunki
+| assigneeName wahi fallback deta hai).
+|--------------------------------------------------------------------------
+*/
+export const teamWorkload = (tasks = [], employees = []) => {
+  const rows = new Map();
+
+  tasks.forEach((task) => {
+    if (!task.assignedTo) return;
+
+    const row = rows.get(task.assignedTo) || {
+      id: task.assignedTo,
+      name: assigneeName(task, employees),
+      total: 0,
+      todo: 0,
+      active: 0,
+      paused: 0,
+      completed: 0,
+    };
+
+    row.total += 1;
+
+    if (task.status === COMPLETED_STATUS) row.completed += 1;
+    else if (task.status === IN_PROGRESS_STATUS) row.active += 1;
+    else if (task.status === PAUSED_STATUS) row.paused += 1;
+    else row.todo += 1;
+
+    rows.set(task.assignedTo, row);
+  });
+
+  // Sabse zyada load sabse upar, barabar ho to naam se
+  return [...rows.values()].sort(
+    (a, b) => b.total - a.total || a.name.localeCompare(b.name)
+  );
+};
+
+// Overdue ya High priority — jo ho chuka usme urgent kuch nahi, isliye
+// Completed bahar. Overdue pehle, uske baad sabse jaldi wali due date.
+export const urgentTasks = (
+  tasks = [],
+  today = todayInputValue(),
+  limit = 5
+) =>
+  tasks
+    .filter(
+      (task) =>
+        task.status !== COMPLETED_STATUS &&
+        (isOverdue(task, today) || task.priority === "High")
+    )
+    .sort((a, b) => {
+      const aOverdue = isOverdue(a, today);
+      const bOverdue = isOverdue(b, today);
+
+      if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+
+      // Bina due date wale sabse aakhir mein
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+
+      return a.dueDate.localeCompare(b.dueDate);
+    })
+    .slice(0, limit);
+
+// Jo sabse haal mein bana ya badla. Service already createAt desc bhejti hai,
+// par edit/status change ke baad updatedAt hi sahi order deta hai.
+const lastTouched = (task) => Math.max(task.updatedAt || 0, task.createdAt || 0);
+
+// Spread zaroori hai — tasks seedha state se aata hai, use sort() se mutate
+// karna React ke liye galat hai
+export const recentTasks = (tasks = [], limit = 5) =>
+  [...tasks].sort((a, b) => lastTouched(b) - lastTouched(a)).slice(0, limit);
+
+// Search + status dono lagakar list chhaanti hai
+export const filterTasks = (tasks, { search, statusFilter, employees, allStatuses }) => {
+  const text = search.trim().toLowerCase();
+
+  return tasks.filter((task) => {
+    const matchesSearch =
+      !text ||
+      (task.title || "").toLowerCase().includes(text) ||
+      assigneeName(task, employees).toLowerCase().includes(text);
+
+    const matchesStatus =
+      statusFilter === allStatuses || task.status === statusFilter;
+
+    return matchesSearch && matchesStatus;
+  });
+};
+
+// Error ho to laal border wala input, warna normal
+export const fieldClass = (error) => (error ? ERROR_INPUT_CLASS : INPUT_CLASS);
+
+/*
+|--------------------------------------------------------------------------
+| Activity
+|--------------------------------------------------------------------------
+| Firebase se activity do parat mein aati hai — action user ki id (Owner ke
+| liye "owner"), uske andar timestamp:
+|
+|   { "EMP01": { "1754640000000": { fromStatus, toStatus, actionBy } } }
+|
+| UI ko ek seedhi list chahiye, isliye dono parat kholkar flat kar dete
+| hain — wahi kaam jo flattenRun tasks ke saath karta hai.
+|
+| employeeId entry ke andar nahi hota (wo path mein hai), par baad mein
+| "kisne kiya" par filter karna ho to chahiye — isliye padhte waqt laga
+| dete hain. id dono keys se banti hai: ek hi timestamp do employee ke
+| paas ho sakta hai, akela timestamp React ke liye unique key nahi.
+|
+| Naya sabse upar.
+|
+| Jis task ka records node hai hi nahi (naye structure se pehle bana hua)
+| — tab khaali array, aur modal apna empty state dikha deta hai.
+*/
+export const taskActivityList = (activity) =>
+  Object.entries(activity || {})
+    .flatMap(([employeeId, entries]) =>
+      Object.entries(entries || {}).map(([key, entry]) => ({
+        ...entry,
+        employeeId,
+        id: `${employeeId}/${key}`,
+        // Key hi timestamp hai. Purani entries mein wo field bhi padi hai —
+        // wo bhi wahi value hai, isliye key se padhna hi kaafi hai
+        timestamp: Number(key) || entry?.timestamp || 0,
+      }))
+    )
+    .filter(isStatusEntry)
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+/*
+| Sirf status ke badlaav timeline mein aate hain — "kisne, kab, kahan se
+| kahan". Task ka banna aur kisi ko milna activity nahi hai; wo baatein run
+| ke createdAt/createdBy/assignedTo mein poori tarah padi hain.
+|
+| toStatus hi is entry ki pehchaan hai: status badla ho tabhi wo hota hai.
+| Purani create/assignment entries mein wo hai hi nahi, isliye Firebase mein
+| jo pehle se padi hain wo apne aap chhant jaati hain — na dikhti hain, na
+| delete karni padti hain.
+*/
+const isStatusEntry = (entry) => Boolean(entry?.toStatus);
+
+/*
+|--------------------------------------------------------------------------
+| Time spent
+|--------------------------------------------------------------------------
+| Task par kitna waqt laga. Kahin store nahi hota — usi activity se gina
+| jaata hai jo pehle se padi hai. Isliye ye ginti kabhi purani nahi pad
+| sakti, aur purane tasks par bhi apne aap chal jaati hai.
+|
+| Niyam ek hi: "In Progress" par ghadi chalu, aur agla koi bhi status use
+| band kar deta hai. Paused ho ya Completed — dono se kaam rukta hai, isliye
+| dono barabar hain. Auto-pause bhi apne aap ginti mein aa jaata hai: uski
+| entry bhi In Progress → Paused hi hoti hai.
+|
+| Entries ek saath sort hoti hain, employee-wise alag nahi. Wajah: status
+| koi bhi badal sakta hai, to ek session Himanshu shuru kare aur HR band
+| kare — ye do alag branches mein padte hain. Alag-alag ginte to jodi hi na
+| banti. Waqt phir bhi usi ke khaate mein jaata hai jisne shuru kiya.
+|
+| Chalu task ka chalta hua waqt bhi jodte hain, warna 2 ghante se chal raha
+| task 0m dikhata.
+|
+| Math.max isliye ki timestamp har user ki apni ghadi se aata hai
+| (Date.now(), server ka waqt nahi). Kisi ki ghadi aage ho to band karne ka
+| waqt shuru karne se pehle ka nikal sakta hai — us soorat mein wo session
+| 0 gina jaata hai, minus nahi. Ginti thodi kam-zyada ho sakti hai; ye
+| andaza hai, hisaab-kitaab nahi.
+*/
+export const taskTimeSpent = (entries = [], now = Date.now()) => {
+  // taskActivityList naya-sabse-upar deti hai — ginti purane se nayi chahiye
+  const ordered = [...entries].sort((a, b) => a.timestamp - b.timestamp);
+
+  const perEmployee = {};
+  let total = 0;
+  // null matlab abhi koi session chalu nahi
+  let openedAt = null;
+  let openedBy = null;
+
+  const closeSession = (endedAt) => {
+    const spent = Math.max(0, endedAt - openedAt);
+
+    total += spent;
+    perEmployee[openedBy] = (perEmployee[openedBy] || 0) + spent;
+    openedAt = null;
+  };
+
+  ordered.forEach((entry) => {
+    if (openedAt !== null && entry.fromStatus === IN_PROGRESS_STATUS) {
+      closeSession(entry.timestamp);
+    }
+
+    if (entry.toStatus === IN_PROGRESS_STATUS) {
+      openedAt = entry.timestamp;
+      openedBy = entry.employeeId;
+    }
+  });
+
+  const running = openedAt !== null;
+
+  if (running) closeSession(now);
+
+  return { total, running, perEmployee };
+};
+
+/*
+| Entry ka padhne wala matter. Normal entries mein text store nahi hota —
+| sirf fromStatus/toStatus — isliye wording kabhi bhi badli ja sakti hai
+| aur purani entries bhi nayi bhasha bolne lagti hain.
+|
+| message sirf wahan store hota hai jahan usme aisi baat ho jo kisi field
+| mein nahi hai — jaise auto-pause, jisme doosre task ka naam hota hai.
+|
+| Kram maayne rakhta hai. Har shart pehle type dekhti hai aur phir purane
+| ishaare par gir jaati hai, isliye bina-type wali purani entry bhi wahi
+| line dikhati hai jo pehle dikhati thi.
+*/
+export const activityLabel = (entry) => {
+  if (!entry) return "";
+
+  // Auto-pause: message mein us doosre task ka naam hai jo shuru hua, aur wo
+  // baat kisi field mein nahi — isliye yahi ek text store hota hai
+  if (entry.type === ACTIVITY_TYPE.AUTO_PAUSED || entry.message) {
+    return entry.message || `Status changed from ${entry.fromStatus} to ${entry.toStatus}`;
+  }
+
+  // Pehla status change: iske pehle koi status tha hi nahi, to "kahan se"
+  // likhne ko kuch nahi
+  if (!entry.fromStatus) return `Status set to ${entry.toStatus}`;
+
+  return `Status changed from ${entry.fromStatus} to ${entry.toStatus}`;
+};

@@ -1,0 +1,822 @@
+import { ROLE } from "../attendance/attendanceConstants";
+
+/*
+|--------------------------------------------------------------------------
+| Permission Registry
+|--------------------------------------------------------------------------
+| Every page and every section the owner can switch on or off, declared once.
+|
+| This file is the single place a new screen is registered. The defaults, the
+| Settings checkboxes, the sidebar filter, the route guards and the stored
+| shape in Firebase are all derived from this list, so adding a page is one
+| entry here rather than an edit in five places.
+|
+| A permission is addressed by a dotted path:
+|
+|   "attendance"           the page
+|   "attendance.analytics" a section inside that page
+|
+| A section is anything the owner should be able to withhold without taking
+| the whole page away: a panel on a dashboard, or a sub-route such as
+| /attendance/reports. Both are the same kind of switch, so both are sections.
+|--------------------------------------------------------------------------
+*/
+
+export const OWNER_ROLE = ROLE.OWNER;
+
+/*
+| The roles the Roles & Access screen can edit. Owner is deliberately absent:
+| it is never stored and never editable.
+*/
+
+export const MANAGED_ROLES = [ROLE.HR, ROLE.MANAGER, ROLE.EMPLOYEE];
+
+export const ROLE_LABELS = {
+  [ROLE.OWNER]: "Owner",
+  [ROLE.HR]: "HR",
+  [ROLE.MANAGER]: "Manager",
+  [ROLE.EMPLOYEE]: "Employee",
+};
+
+export const ROLE_DESCRIPTIONS = {
+  [ROLE.HR]: "Manages people, attendance, leave and payroll for the company.",
+  [ROLE.MANAGER]: "Approves attendance, corrections and leave for the departments they run.",
+  [ROLE.EMPLOYEE]: "Self service access to their own attendance, leave and tasks.",
+};
+
+/*
+|--------------------------------------------------------------------------
+| Pages
+|--------------------------------------------------------------------------
+| `defaults` is what a company that has never opened Roles & Access gets, and
+| what "Reset to Defaults" restores. HR is given a full HRMS desk; employee is
+| given self service.
+|
+| A manager is given the approval desk and nothing that belongs to running the
+| company: the same attendance, leave and holiday screens HR reads, and none
+| of the people, money or configuration ones. What they see inside those
+| screens is narrowed again at runtime to the departments they own, so the
+| switches here decide which screens exist for the role and the department
+| scope decides whose rows are on them.
+|
+| `path` is the route the sidebar links to and the route guard falls back to.
+| A section carrying its own `path` is a sub-route rather than a panel.
+|--------------------------------------------------------------------------
+*/
+
+export const PERMISSION_PAGES = [
+
+  {
+    key: "dashboard",
+    label: "Dashboard",
+    description: "Landing page with tasks and shortcuts",
+    path: "/dashboard",
+    defaults: { hr: true, manager: true, employee: true },
+    sections: [
+      {
+        key: "tasks",
+        label: "Today's Tasks",
+        description: "Tasks assigned to the signed in user",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "quickLinks",
+        label: "Quick Links",
+        description: "Shortcuts to frequently used modules",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+    ],
+  },
+
+  {
+    key: "departments",
+    label: "Departments",
+    description: "Departments and designations",
+    path: "/departments",
+    /*
+    | Off for a manager. This screen creates, renames and deletes departments
+    | and is where a department's manager is appointed - running a department
+    | and deciding which departments exist are not the same right.
+    */
+    defaults: { hr: true, manager: false, employee: false },
+    sections: [
+      {
+        /*
+        | Bringing a company's organisation chart in from a spreadsheet.
+        |
+        | Off for every managed role by default, including HR, for the same
+        | reason Import Attendance is: it is the only screen that creates
+        | departments in bulk, and every department it creates becomes a
+        | choice on the employee form, a group a manager can be appointed to
+        | and a heading in every report grouped by department. A right that
+        | large is one the owner should hand out deliberately rather than find
+        | already granted.
+        |
+        | The import itself only ever adds - it never renames or deletes a
+        | department, a designation or a manager - so the risk this switch
+        | guards is a chart cluttered with departments nobody meant to create,
+        | not one with anything missing from it.
+        */
+        key: "import",
+        label: "Import Departments",
+        description: "Import departments and designations from a spreadsheet",
+        path: "/departments/import",
+        defaults: { hr: false, manager: false, employee: false },
+      },
+    ],
+  },
+
+  {
+    key: "employees",
+    label: "Employees",
+    description: "Employee directory and profiles",
+    path: "/employees",
+    defaults: { hr: true, manager: true, employee: false },
+    sections: [
+      {
+        key: "add",
+        label: "Add Employee",
+        description: "Create a new employee record",
+        path: "/employees/add",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "details",
+        label: "Employee Details",
+        description: "Open a single employee profile",
+        path: "/employees/details",
+        /*
+        | The details screen edits an employee's own record. A manager reads
+        | the directory to know who is on their team, which the list already
+        | answers, so the editable profile stays with HR by default.
+        */
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        /*
+        | Changing somebody's portal role. It is a section rather than part of
+        | the details screen because the two are different rights: reading and
+        | correcting an employee's own record is one thing, and deciding what
+        | the portal lets them do is another.
+        |
+        | A manager is given it, and is narrowed twice on the way in - to the
+        | employees of the departments they run, and to the roles they could
+        | hand out at all, which is manager and employee. Both narrowings live
+        | in `roleAssignment` rather than here: this switch decides whether the
+        | role has the right, the scope decides whose rows it appears on.
+        */
+        key: "editRole",
+        label: "Edit Employee Role",
+        description: "Change an employee's portal role",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+    ],
+  },
+
+  {
+    key: "onboarding",
+    label: "On-boarding",
+    description: "Invite and review new joiners",
+    path: "/OnboardDashboard",
+    defaults: { hr: true, manager: false, employee: false },
+    sections: [
+      {
+        key: "create",
+        label: "Create On-boarding",
+        description: "Send a new on-boarding invite",
+        path: "/OnboardDashboard/OnBoardForm",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "requests",
+        label: "On-boarding Requests",
+        description: "Submissions waiting to be reviewed",
+        path: "/OnboardDashboard/OnBoardRequest",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "history",
+        label: "On-boarding History",
+        description: "Completed and rejected submissions",
+        path: "/OnboardDashboard/OnBoardhistory",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+    ],
+  },
+
+  /*
+  | Resignation & Exit - the counterpart to on-boarding, and placed next to it
+  | for that reason: one module brings somebody in and this one sees them out.
+  |
+  | The page itself is on for everybody, because it is where an employee
+  | raises their own resignation and watches it move. What they can do inside
+  | it is decided by the sections, and those are what actually separate the
+  | four roles here - an employee gets `apply`, `equipment` and `certificate`
+  | and none of the desks.
+  */
+  {
+    key: "resignation",
+    label: "Resignation & Exit",
+    description: "Resignations, exit clearance and full & final settlement",
+    path: "/resignation",
+    defaults: { hr: true, manager: true, employee: true },
+    sections: [
+      {
+        /*
+        | The Resign button on the employee's own profile.
+        |
+        | On for everybody, and deliberately so: resigning is not a privilege
+        | the company grants, and a portal that can be configured to take the
+        | button away would leave somebody with no way to give notice through
+        | the system they are told to use. It remains a switch only because an
+        | owner running a pilot may want to keep the module closed at first.
+        */
+        key: "apply",
+        label: "Raise Resignation",
+        description: "Submit their own resignation from their profile",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        /*
+        | The approval desk: the manager's step and HR's step, on one screen
+        | that shows each role only the rows it is their turn to decide.
+        |
+        | Given to a manager, who is narrowed again at runtime to the
+        | departments they run - and never to their own resignation, which
+        | falls to HR exactly as their own leave does. This switch decides
+        | whether the role has the desk; the department scope decides whose
+        | resignations are on it.
+        */
+        key: "approvals",
+        label: "Resignation Approvals",
+        description: "Approve or reject resignations",
+        path: "/resignation/approvals",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        /*
+        | The employee's own equipment declaration. Not an HR screen: HR reads
+        | what was declared on the settlement page, and this is the form the
+        | person leaving fills in.
+        */
+        key: "equipment",
+        label: "Equipment Submission",
+        description: "Declare and return company equipment before leaving",
+        path: "/resignation/equipment",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        /*
+        | Pricing the exit. Withheld from a manager along with every other
+        | money screen in this registry - running a department and deciding
+        | what somebody is owed on the way out are not the same right.
+        */
+        key: "settlement",
+        label: "Full & Final Settlement",
+        description: "Work out and review the final settlement",
+        path: "/resignation/settlement",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        /*
+        | The last signature, which releases the money and completes the exit.
+        |
+        | Off for every managed role by default, including HR - the same
+        | position `payroll.approve` and `payroll.lock` take, and for the same
+        | reason. The person who works out a settlement should not also be the
+        | one who approves paying it, and an owner who wants those to be the
+        | same person can say so here deliberately rather than find it already
+        | arranged. Until they do, the owner is the only one who holds it.
+        */
+        key: "financeApprove",
+        label: "Finance Approval",
+        description: "Sign off the settlement and complete the exit",
+        defaults: { hr: false, manager: false, employee: false },
+      },
+      {
+        /*
+        | The certificate. On for an employee because it is theirs - it is the
+        | document they will be asked for by whoever hires them next, and
+        | needing to email HR for a copy of it is the situation this avoids.
+        */
+        key: "certificate",
+        label: "No Objection Certificate",
+        description: "View and print the exit certificate",
+        path: "/resignation/noc",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+    ],
+  },
+
+  {
+    key: "attendance",
+    label: "Attendance",
+    description: "Daily attendance, corrections and reports",
+    path: "/attendance",
+    defaults: { hr: true, manager: true, employee: true },
+    sections: [
+      {
+        key: "summary",
+        label: "Summary Cards",
+        description: "Present, late and absent counts for today",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "today",
+        label: "Today's Attendance",
+        description: "The whole company's attendance for today",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "calendar",
+        label: "Calendar",
+        description: "The signed in user's month",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "recentActivity",
+        label: "Recent Activity",
+        description: "Live punch in and punch out feed",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "analytics",
+        label: "Analytics",
+        description: "Attendance rates and trends",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "requests",
+        label: "Requests",
+        description: "Attendance corrections and approvals",
+        path: "/attendance/requests",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "myAttendance",
+        label: "My Attendance",
+        description: "The signed in user's own month",
+        path: "/attendance/my",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "daily",
+        label: "Daily Attendance",
+        description: "Every employee on a chosen day",
+        path: "/attendance/daily",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        /*
+        | The approval desk: every recorded day of a period, with the queue,
+        | the bulk sign off and the decision trail.
+        |
+        | It is a section of its own rather than part of Daily Attendance
+        | because reading a day and deciding it are two different rights. A
+        | role can be given the daily list to watch the floor without being
+        | given the authority to say what a month of attendance is worth, and
+        | before this the two arrived together.
+        |
+        | Withheld from an employee, and given to a manager - who is narrowed
+        | again at runtime to the departments they run. This switch decides
+        | whether the role has the desk at all; the department scope decides
+        | whose days are on it.
+        */
+        key: "approvals",
+        label: "Attendance Approval",
+        description: "Approve or reject recorded days",
+        path: "/attendance/approvals",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "monthly",
+        label: "Monthly Attendance",
+        description: "Every employee across a month",
+        path: "/attendance/monthly",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "regularization",
+        label: "Regularization",
+        description: "Raise a correction for a past day",
+        path: "/attendance/regularization",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "reports",
+        label: "Reports",
+        description: "Daily, monthly and department reports",
+        path: "/attendance/reports",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        /*
+        | Bringing a company's attendance history in from the system they were
+        | on before.
+        |
+        | Off for every managed role by default, including HR. It is the only
+        | screen in the module that writes months of attendance in one action,
+        | and unlike the approval desk - which decides days that were already
+        | recorded - it creates them. A right that large is one the owner
+        | should hand out deliberately rather than find already granted, which
+        | is the same reason Attendance Settings is off by default above.
+        |
+        | A manager who is given it is narrowed at runtime to the departments
+        | they run: every row for an employee outside their scope is rejected
+        | by the matching step and can never reach a write.
+        */
+        key: "import",
+        label: "Import Attendance",
+        description: "Import historical attendance from another system",
+        path: "/attendance/import",
+        defaults: { hr: false, manager: false, employee: false },
+      },
+      {
+        key: "settings",
+        label: "Attendance Settings",
+        description: "Working hours and attendance rules",
+        path: "/attendance/settings",
+        defaults: { hr: false, manager: false, employee: false },
+      },
+    ],
+  },
+
+  {
+    key: "leave",
+    label: "Leave",
+    description: "Leave balance, applications and approvals",
+    path: "/leave",
+    defaults: { hr: true, manager: true, employee: true },
+    sections: [
+      {
+        key: "balance",
+        label: "Leave Balance",
+        description: "Allocated, used and remaining days",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "calendar",
+        label: "Calendar",
+        description: "Leave plotted across the year",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "history",
+        label: "History",
+        description: "Every leave request of the year",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "apply",
+        label: "Apply Leave",
+        description: "Submit a new leave request",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "approvals",
+        label: "Approvals",
+        description: "Review the company's leave requests",
+        path: "/leave/approvals",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+    ],
+  },
+
+  {
+    key: "holidays",
+    label: "Holidays",
+    description: "The company holiday calendar",
+    path: "/holidays",
+    defaults: { hr: true, manager: true, employee: true },
+    sections: [
+      {
+        key: "calendar",
+        label: "Calendar",
+        description: "Holidays plotted across the year",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "upcoming",
+        label: "Upcoming Holidays",
+        description: "What is coming up next",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "list",
+        label: "Holiday List",
+        description: "The full list, with add, edit and delete",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      /*
+      | A declared holiday closes the office for everybody, not for one
+      | department, so declaring one is not a departmental decision.
+      */
+      {
+        key: "add",
+        label: "Add Holiday",
+        description: "Declare a new company holiday",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "edit",
+        label: "Edit Holiday",
+        description: "Change a declared holiday",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "delete",
+        label: "Delete Holiday",
+        description: "Remove a declared holiday",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+    ],
+  },
+
+  {
+    key: "salary",
+    label: "Salary",
+    description: "Salary structures and revisions",
+    path: "/salarydashboard",
+    defaults: { hr: true, manager: false, employee: false },
+    sections: [
+      /*
+      | The tab the two actions below are performed on. Withholding it takes
+      | the tab off the salary screen; withholding an action leaves the tab
+      | readable but takes that one button off it.
+      */
+      {
+        key: "manage",
+        label: "Create & Update Tab",
+        description: "Open the salary create and update list",
+        path: "/salarydashboard/salary",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "create",
+        label: "Create Salary",
+        description: "Assign a new salary structure to an employee",
+        path: "/salarydashboard/salary/create",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "update",
+        label: "Update Salary",
+        description: "Revise an employee's existing salary",
+        path: "/salarydashboard/salary/edit",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "revisions",
+        label: "Revisions Tab",
+        description: "Salary revision history",
+        path: "/salarydashboard/salary/revisions",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "history",
+        label: "Employee History",
+        description: "One employee's salary history",
+        path: "/salarydashboard/salary/history",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+    ],
+  },
+
+  {
+    key: "payroll",
+    label: "Payroll",
+    description: "Payroll runs and payslips",
+    path: "/payrolldashboard",
+    defaults: { hr: true, manager: false, employee: false },
+    sections: [
+      {
+        key: "payslip",
+        label: "Payslips",
+        description: "Open an individual payslip",
+        path: "/payrolldashboard/payslip",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+       {
+        key: "generate",
+        label: "Generate Payroll",
+        description: "Run the month's payroll, for one employee or all",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+      {
+        key: "approve",
+        label: "Approve Payroll",
+        description: "Sign off a generated month and close it to changes",
+        defaults: { hr: false, manager: false, employee: false },
+      },
+      {
+        key: "lock",
+        label: "Lock Payroll",
+        description: "Make an approved month final. This cannot be undone",
+        defaults: { hr: false, manager: false, employee: false },
+      },
+    ],
+  },
+
+  /*
+  | The employee's own salary, which is a different right from the payroll
+  | above and not a section of it. That page runs the company's month and
+  | shows every employee's pay; this one shows the signed in employee theirs.
+  |
+  | So it is on by default for everybody. It is the one money screen a person
+  | is entitled to without being trusted with anybody else's - and an employee
+  | who cannot see what they were paid has to ask HR for a payslip every month.
+  */
+  {
+    key: "myPayroll",
+    label: "My Payroll",
+    description: "The signed in employee's own salary and payslips",
+    path: "/my-payroll",
+    defaults: { hr: true, manager: true, employee: true },
+    sections: [
+      {
+        key: "summary",
+        label: "Yearly Summary",
+        description: "Gross, deductions, net and annual CTC for the year",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "currentMonth",
+        label: "Current Month Salary",
+        description: "The latest month's pay, in full",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "history",
+        label: "Payroll History",
+        description: "Every month of the financial year",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      /*
+      | Reading what you were paid and taking a copy of the payslip away are
+      | separate rights: without this the figures are still on screen, with
+      | every download button closed.
+      */
+      {
+        key: "payslip",
+        label: "Download Payslip",
+        description: "Open and print their own payslip",
+        path: "/my-payroll/payslip",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+    ],
+  },
+
+  {
+    key: "hrPolicy",
+    label: "HR Policy",
+    description: "Statutory deduction rules for the company",
+    path: "/hr-policy",
+    defaults: { hr: true, employee: false },
+    sections: [
+      /*
+      | The two policies are panels rather than sub-routes: withholding one
+      | takes its card off the screen and leaves the other readable.
+      */
+      {
+        key: "pf",
+        label: "PF Policy",
+        description: "Provident Fund rate and calculation base",
+        defaults: { hr: true, employee: false },
+      },
+      {
+        key: "esi",
+        label: "ESI Policy",
+        description: "ESI rates and salary eligibility limit",
+        defaults: { hr: true, employee: false },
+      },
+      /*
+      | Reading a rate and setting it are different rights: without this the
+      | cards are still shown, with their switches, fields and Save closed.
+      */
+      {
+        key: "update",
+        label: "Save Policy",
+        description: "Change and save the PF and ESI policies",
+        defaults: { hr: true, employee: false },
+      },
+    ],
+  },
+
+  {
+    key: "tasks",
+    label: "Tasks",
+    description: "Task board for the company",
+    path: "/tasks",
+    defaults: { hr: true, manager: true, employee: true },
+    sections: [
+      {
+        key: "viewAll",
+        label: "All Tasks",
+        description: "See everyone's tasks, not just their own",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "progress",
+        label: "Task Progress",
+        description: "Status distribution across tasks",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "workload",
+        label: "Team Workload",
+        description: "Assigned work per employee",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "urgent",
+        label: "Urgent & Overdue",
+        description: "Overdue and high priority tasks",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "recent",
+        label: "Recent Tasks",
+        description: "Latest task activity",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "activity",
+        label: "Task Activity",
+        description: "View task activity/history",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "create",
+        label: "Create Task",
+        description: "Assign a new task to an employee",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "createOwn",
+        label: "Create Own Task",
+        description: "Create a task for themselves",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "update",
+        label: "Update Task",
+        description: "Edit an existing task",
+        defaults: { hr: true, manager: true, employee: false },
+      },
+      {
+        key: "updateOwn",
+        label: "Update Own Task",
+        description: "Edit a task they created",
+        defaults: { hr: true, manager: true, employee: true },
+      },
+      {
+        key: "delete",
+        label: "Delete Task",
+        description: "Remove a task",
+        defaults: { hr: true, manager: false, employee: false },
+      },
+    ],
+
+  },
+
+];
+
+/*
+|--------------------------------------------------------------------------
+| Lookups
+|--------------------------------------------------------------------------
+| Built once from the list above so a check never walks the registry.
+|--------------------------------------------------------------------------
+*/
+
+const PAGE_MAP = PERMISSION_PAGES.reduce((map, page) => {
+  map[page.key] = page;
+  return map;
+}, {});
+
+export const getPageDefinition = (pageKey) =>
+  PAGE_MAP[pageKey] || null;
+
+export const getSectionDefinition = (pageKey, sectionKey) =>
+  getPageDefinition(pageKey)?.sections?.find(
+    (section) => section.key === sectionKey
+  ) || null;
+
+export const hasSections = (pageKey) =>
+  Boolean(getPageDefinition(pageKey)?.sections?.length);
+
+/*
+| A dotted path split into the page and the section it addresses. A path with
+| no dot is a page on its own.
+*/
+
+export const parsePermissionPath = (path = "") => {
+
+  const [pageKey, sectionKey] = String(path).split(".");
+
+  return {
+    pageKey: pageKey || "",
+    sectionKey: sectionKey || "",
+  };
+
+};
